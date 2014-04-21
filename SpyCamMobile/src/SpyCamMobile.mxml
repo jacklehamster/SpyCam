@@ -1,0 +1,868 @@
+<?xml version="1.0" encoding="utf-8"?>
+<s:Application xmlns:fx="http://ns.adobe.com/mxml/2009" 
+							xmlns:s="library://ns.adobe.com/flex/spark"
+							xmlns:cam="com.paris24.cam.*"
+						    addedToStage="init(event)" 
+							backgroundColor="0x000000">
+	<fx:Script>
+		<![CDATA[
+			import com.nitobi.webapis.youtube.UserUpload;
+			import com.nitobi.webapis.youtube.YouTubeService;
+			import com.nitobi.webapis.youtube.event.YouTubeEvent;
+			import com.paris24.cam.MotionCapture;
+			
+			import flash.net.navigateToURL;
+			
+			static private const DEBUG:Boolean = NativeApplication.nativeApplication.applicationID=="com.dobuki.spycam.debug";
+			static private const ACTIVE:Boolean = true;
+			static private const SLEEPDELAY:int = (DEBUG?1000:60000*3);	//	 3min
+			static private const WIDTH:int = 320;
+			static private const HEIGHT:int = 240;
+			static private const CAPTURERATE:int = 5;
+			static private const PLAYRATE:int = 5;
+			
+			private var timer:Timer = new Timer(1000);
+			private var lockTimer:Timer = new Timer(30000,1);
+			private var lastWake:Number = 0;
+						
+			private var overlay:Sprite = new Sprite();
+			
+			private var signupLink:String = "https://accounts.google.com/SignUp?service=youtube&continue=https://www.youtube.com/signin?action_handle_signin=true&feature=sign_in_button&next=%2F";
+			
+			protected function init(event:Event):void
+			{
+				stage.addEventListener(StageOrientationEvent.ORIENTATION_CHANGE,onOrientation);
+				
+				stage.scaleMode = StageScaleMode.NO_SCALE;
+				
+				if(lockCode.length) {
+					startApplication(null);
+				}
+				else {
+					var tf:TextField = new TextField();
+					tf.name = "welcome";
+					tf.addEventListener(Event.RENDER,
+						function(e:Event):void {
+							var tf:TextField = e.currentTarget as TextField;
+							tf.y = 50;
+							tf.width = stage.stageWidth;
+							tf.height = stage.stageHeight-tf.y;
+						});
+					stage.invalidate();
+					tf.mouseEnabled = false;
+					tf.defaultTextFormat = new TextFormat(null,48,0xaaaaaa,null,null,null,null,null,TextFormatAlign.CENTER);
+					
+					tf.htmlText = "<b><font color='#FFFFFF'>Spy☾am v 1.0</font></b>\n\n\n<font size='20px'>developed by\nDobuki Studio</font>";
+					sprite.addChild(tf);
+					
+					var loader:Loader = new Loader();
+					loader.name = "image";
+					loader.contentLoaderInfo.addEventListener(Event.COMPLETE,
+						function(e:Event):void {
+							stage.invalidate();
+						});
+					loader.load(new URLRequest("144x144.png"));
+					loader.addEventListener(Event.RENDER,
+						function(e:Event):void {
+							loader.x = (stage.stageWidth-loader.width)/2;
+							loader.y = (stage.stageHeight-loader.height)/2;
+						});
+					sprite.addChild(loader);
+					
+					stage.addEventListener(MouseEvent.CLICK,startApplication);
+				}
+			}
+			
+			private function onOrientation(e:StageOrientationEvent):void {
+				stage.invalidate();
+			}
+			
+			private function startApplication(e:MouseEvent=null):void {
+				if(e) {
+					stage.removeEventListener(MouseEvent.CLICK,startApplication);
+					
+					var tf:TextField = sprite.getChildByName("welcome") as TextField;
+					sprite.removeChild(tf);
+					
+					var loader:Loader = sprite.getChildByName("image") as Loader;
+					sprite.removeChild(loader);
+					
+					e.updateAfterEvent();
+				}
+				
+				MotionCapture.active = false;
+				
+				youtubeMotion.frameRate = PLAYRATE;
+				youtubeMotion.setDevCredentials("Dobuki","AI39si5k3GOklmo6cVckF0ZyFFKKcZKdAcW8PRyB-QbKb88gEyMNSvHPyJ1Jd0ydVE-4okADPQW89yTwtFlqS8S47r2y0BlE_w");
+														  
+				var cam:Camera = Camera.getCamera();
+				cam.setMode(WIDTH,HEIGHT,CAPTURERATE);
+				youtubeMotion.attachCamera(cam);
+				youtubeMotion.addEventListener(YouTubeEvent.YT_UPLOAD_PROGRESS,uploadProgress);
+				youtubeMotion.addEventListener(YouTubeEvent.YT_UPLOAD_COMPLETE,uploadComplete);
+				stage.addEventListener(MouseEvent.MOUSE_DOWN,mouseDown);
+				lockTimer.addEventListener(TimerEvent.TIMER_COMPLETE,onLockTimer);
+				addEventListener(Event.RENDER,
+					function(e:Event):void {
+						var videosInProgress:int = youtubeMotion.captureDirectory.getDirectoryListing().length+youtubeMotion.pendingDirectory.getDirectoryListing().length;
+						var idleMode:String = videosInProgress>0 || MotionCapture.active ? SystemIdleMode.KEEP_AWAKE : SystemIdleMode.NORMAL;
+						if(NativeApplication.nativeApplication.systemIdleMode != idleMode)
+							NativeApplication.nativeApplication.systemIdleMode = idleMode;
+					});
+				NativeApplication.nativeApplication.systemIdleMode = SystemIdleMode.KEEP_AWAKE;
+				NativeApplication.nativeApplication.executeInBackground = true;
+				
+				timer.addEventListener(TimerEvent.TIMER,onClockTick);
+
+				var clock:TextField;
+				clock = new TextField();
+				clock.name = "clock";
+				clock.mouseEnabled = false;
+				clock.defaultTextFormat = new TextFormat("Courier",30);
+				clock.textColor = 0x888888;
+				sprite.addChild(clock);
+
+				timer.start();
+				
+				UserUpload.getDescription = getDescription;
+				
+				if(lockCode.length) {
+					lockView();
+				}
+				else {
+					attemptLogin();
+				}
+			}
+			
+			private function attemptLogin():void {
+				if(youtubeMotion.service.storedUsername.length && youtubeMotion.service.storedPassword.length) {
+					youtubeMotion.login(youtubeMotion.service.storedUsername,youtubeMotion.service.storedPassword);
+					youtubeMotion.service.addEventListener(YouTubeEvent.YT_LOGIN_SUCCESS,onLogin);
+					youtubeMotion.service.addEventListener(YouTubeEvent.YT_LOGIN_ERROR,onLogin);
+				}
+				else {
+					showSettings(null);
+					changeLogin(null);
+				}
+			}
+			
+			private function onLogin(e:YouTubeEvent):void {
+				youtubeMotion.service.removeEventListener(YouTubeEvent.YT_LOGIN_SUCCESS,onLogin);
+				youtubeMotion.service.removeEventListener(YouTubeEvent.YT_LOGIN_ERROR,onLogin);
+				if(e.type==YouTubeEvent.YT_LOGIN_SUCCESS) {
+					wakeUp();
+				}
+				else {
+					showSettings(null);
+					changeLogin("Failed login. Please try again.");
+				}
+			}
+			
+			private function get lockCode():String {
+				var so:SharedObject = SharedObject.getLocal(YouTubeService.localSharedObjKey);
+				return so.data.lockCode ? so.data.lockCode : "";
+			}
+			
+			private function set lockCode(value:String):void {
+				var so:SharedObject = SharedObject.getLocal(YouTubeService.localSharedObjKey);
+				so.setProperty("lockCode",value);
+				so.flush();
+			}
+			
+			private function uploadProgress(e:YouTubeEvent):void {
+				var loaded:Number = e.data.bytesLoaded;
+				var total:Number = e.data.bytesTotal;
+				sprite.graphics.clear();
+				sprite.graphics.lineStyle(5,0x777777);
+				sprite.graphics.moveTo(0,50);
+				sprite.graphics.lineTo(stage.stageWidth*loaded/total,50);
+			}
+			
+			private function uploadComplete(e:YouTubeEvent):void {
+				sprite.graphics.clear();
+				stage.invalidate();
+			}
+			
+			private function lockView():void {
+				var lock:TextField = sprite.getChildByName("lock") as TextField;
+				if(!lock) {
+					lock = new TextField();
+					lock.name = "lock";
+					lock.multiline = false;
+					lock.type = TextFieldType.INPUT;
+					lock.addEventListener(Event.RENDER,
+						function(e:Event):void {
+							var lock:TextField = e.currentTarget as TextField;
+							lock.y = 50;
+							lock.width = stage.stageWidth-40;
+							lock.x = 20;
+							lock.height = 100;
+						});
+					stage.invalidate();
+					lock.displayAsPassword = true;
+					lock.defaultTextFormat = new TextFormat(null,48,null,true);
+					lock.background = true;
+					lock.backgroundColor = 0xFFFFFF;
+					sprite.addChild(lock);
+					lock.addEventListener(KeyboardEvent.KEY_UP,unlock);
+				}
+				lock.requestSoftKeyboard();
+				lockTimer.reset();
+				lockTimer.start();
+			}
+			
+			protected function mouseDown(event:MouseEvent):void
+			{
+				if(settings.visible) {
+					lockTimer.reset();
+					lockTimer.start();
+				}
+				else {
+					var now:Number = new Date().time;
+					sprite.visible = true;
+					settings.visible = false;
+					if(lockCode.length) {
+						var lock:TextField = sprite.getChildByName("lock") as TextField;
+						if(lock || (lastWake && now-lastWake>SLEEPDELAY && !awake)) {
+							lockView();
+							return;
+						}
+					}
+					
+					if(awake) 
+					{
+						if(youtubeMotion.video.visible && !MotionCapture.active) {
+							var rect:Rectangle = youtubeMotion.video.getRect(stage);
+							if(rect.contains(event.stageX,event.stageY)) {
+								var cam:Camera = youtubeMotion.camera;
+								var camIndex:int;
+								for(var i:int=0;i<Camera.names.length;i++) {
+									if(cam && cam.name!=Camera.getCamera(i.toString()).name) {
+										camIndex = i;
+										cam = Camera.getCamera(i.toString());
+										break;
+									}
+								}
+								if(!cam)
+									cam = Camera.getCamera();
+								if(cam!=youtubeMotion.camera) {
+									cam.setMode(WIDTH,HEIGHT,CAPTURERATE);
+									youtubeMotion.attachCamera(cam);
+								}
+							}
+						}
+					}
+					
+					wakeUp();
+					event.updateAfterEvent();
+				}
+			}
+			
+			private function unlock(e:KeyboardEvent):void {
+				var lock:TextField = e.currentTarget as TextField;
+				if(lock.length==lockCode.length) {
+					var pass:String = lock.text;
+					hideLock();
+					lockTimer.stop();
+					if(pass==lockCode) {
+						lastWake = 0;
+						wakeUp();
+					}
+				}
+				else {
+					lockTimer.reset();
+					lockTimer.start();
+				}
+			}
+			
+			private function hideLock():void {
+				var lock:TextField = sprite.getChildByName("lock") as TextField;
+				if(lock) {
+					sprite.removeChild(lock);
+					lock.text = "";
+					lock.removeEventListener(KeyboardEvent.KEY_UP,unlock);
+				}
+			}
+			
+			private function onLockTimer(e:TimerEvent):void {
+				if(youtubeMotion.video.parent)
+					sprite.removeChild(youtubeMotion.video);
+				
+				var tf:TextField = sprite.getChildByName("label") as TextField;
+				if(tf)
+					sprite.removeChild(tf);
+				stage.frameRate = 1;
+				youtubeMotion.video.visible = false;
+				overlay.visible = youtubeMotion.video.visible;
+				hideLock();
+				sprite.visible = false;
+			}
+			
+			private function onClockTick(e:TimerEvent):void {
+				var clock:TextField = sprite.getChildByName("clock") as TextField;
+				var now:Date = new Date();
+				clock.text = (100+now.hours).toString().substr(1)+(timer.currentCount%2==0?":":" ")+(100+now.minutes).toString().substr(1);
+				
+				if(overlay.visible && youtubeMotion.video.stage) {
+					overlay.addEventListener(Event.RENDER,
+						function(e:Event):void {
+							var overlay:Sprite = e.currentTarget as Sprite;
+							overlay.graphics.clear();
+							var rect:Rectangle = youtubeMotion.video.getRect(sprite);
+							if(timer.currentCount%2==0 && MotionCapture.active) {
+								overlay.graphics.beginFill(0xFF0000);
+								overlay.graphics.drawCircle(rect.x+10,rect.y+10,4);
+								overlay.graphics.endFill();
+							}
+							overlay.graphics.lineStyle(1,0xAAAAAA);
+							overlay.graphics.drawRect(rect.x,rect.y,rect.width,rect.height);
+						});
+					stage.invalidate();
+				}
+			}
+			
+			private function get awake():Boolean {
+				return lockTimer.running;
+			}
+			
+			private function wakeUp(force:Boolean = false):void {
+				stage.frameRate = 24;
+				if(!force && !youtubeMotion.service.isAuthenticated) {
+					attemptLogin();
+					return;
+				}
+				
+				var now:Number = new Date().time;
+				lastWake = now;
+				
+				var tf:TextField = sprite.getChildByName("label") as TextField;
+				if(!tf) {
+					tf = new TextField();
+					tf.name = "label";
+					tf.addEventListener(Event.RENDER,
+						function(e:Event):void {
+							var tf:TextField = e.currentTarget as TextField;
+							tf.x = 0;
+							tf.width = stage.stageWidth;
+						});
+					stage.invalidate();
+					tf.mouseEnabled = false;
+					tf.defaultTextFormat = new TextFormat(null,30,0xaaaaaa,null,null,null,null,null,TextFormatAlign.RIGHT);
+				}
+				tf.text = (youtubeMotion.camera?youtubeMotion.camera.name:"")
+					+" ("+(youtubeMotion.captureDirectory.getDirectoryListing().length+youtubeMotion.pendingDirectory.getDirectoryListing().length) + ")";
+				sprite.addChild(tf);
+				
+				sprite.addChild(youtubeMotion.video);
+				sprite.addChild(overlay);
+				
+				if(!youtubeMotion.video.hasEventListener(Event.RENDER)) {
+					youtubeMotion.video.addEventListener(Event.RENDER,
+						function(e:Event):void {
+							var video:Video = e.currentTarget as Video;
+							video.x = stage.stageWidth/2-video.width/2;
+							video.y = stage.stageHeight/2-video.height/2;
+						});
+					stage.invalidate();
+				}
+				youtubeMotion.video.visible = true;
+				overlay.visible = youtubeMotion.video.visible;
+
+				tf = overlay.getChildByName("instruction") as TextField;
+				if(!tf) {
+					tf = new TextField();
+					tf.name="instruction";
+					tf.mouseEnabled = false;
+					tf.defaultTextFormat = new TextFormat(null,20,0xaaaaaa,null,null,null,null,null,TextFormatAlign.CENTER);
+					tf.text = "tap to switch cameras";
+					tf.height = 25;
+					tf.addEventListener(Event.RENDER,
+						function(e:Event):void {
+							var tf:TextField = e.currentTarget as TextField;
+							var rect:Rectangle = youtubeMotion.video.getRect(sprite);
+							tf.x = rect.left;
+							tf.y = rect.bottom - tf.height-10;
+							tf.width = rect.width;
+						});
+				}
+				tf.visible = !MotionCapture.active;
+				overlay.addChild(tf)
+
+				tf = overlay.getChildByName("commands") as TextField;
+				if(!tf) {
+					tf = new TextField();
+					tf.name="commands";
+					tf.defaultTextFormat = new TextFormat(null,35,0xaaaaaa,null,null,null,null,null,TextFormatAlign.CENTER,null,null,null);
+					var css:StyleSheet = new StyleSheet();
+					css.parseCSS('a:hover { color: #FFD700; } a:active { color: #FFFF00; }');
+					tf.styleSheet = css;
+
+					tf.addEventListener(TextEvent.LINK,onCommand);
+					tf.addEventListener(Event.RENDER,
+						function(e:Event):void {
+							var tf:TextField = e.currentTarget as TextField;
+							var rect:Rectangle = youtubeMotion.video.getRect(sprite);
+							tf.x = 0;
+							tf.y = rect.bottom+50;
+							tf.width = stage.stageWidth;
+							tf.height = stage.stageHeight-tf.y;
+						});
+					stage.invalidate();
+				}
+				tf.htmlText = MotionCapture.active ? 
+					"<a href='event:stop'>[ STOP CAPTURE ]</a>" : 
+					"<a href='event:start'>[ START CAPTURE ]</a>"+
+					"\n\n<a href='event:viewVideos'>[ VIEW VIDEOS ]</a>"+
+					"\n\n<a href='event:settings'>[ SETTINGS ]</a>";
+				overlay.addChild(tf)
+				
+				lockTimer.reset();
+				lockTimer.start();
+			}
+			
+			private function onCommand(e:TextEvent):void {
+				switch(e.text) {
+					case "start":
+						MotionCapture.active = true;					
+						break;
+					case "stop":
+						MotionCapture.active = false;
+						break;
+					case "viewVideos":
+						navigateToURL(new URLRequest("https://accounts.google.com/ServiceLoginAuth?Email="+youtubeMotion.service.storedUsername+"&continue=http%3A%2F%2Fwww.youtube.com%2Fmy_videos"));
+						break;
+					case "settings":
+						showSettings(null);
+						break;
+				}
+				wakeUp();
+			}
+			
+			private function showSettings(message:String):void {
+				sprite.visible = false;
+				settings.visible = true;
+				
+				var mainSettings:Sprite = settings.getChildByName("main") as Sprite;
+				if(!mainSettings) {
+					mainSettings = new Sprite();
+					mainSettings.name = "main";
+					settings.addChild(mainSettings);
+				}
+				mainSettings.visible = true;
+				
+				var tf:TextField = mainSettings.getChildByName("options") as TextField;
+				if(!tf) {
+					tf = new TextField();
+					tf.name = "options";
+					tf.defaultTextFormat = new TextFormat("Courier",30,0xaaaaaa,null,null,null,null,null,TextFormatAlign.CENTER);
+					tf.addEventListener(Event.RENDER,
+						function(e:Event):void {
+							var tf:TextField = e.currentTarget as TextField;
+							tf.x = 0;
+							tf.y = 30;
+							tf.height = stage.stageHeight-tf.y;
+							tf.width = stage.stageWidth;
+						});
+					var css:StyleSheet = new StyleSheet();
+					css.parseCSS('a:hover { color: #FFD700; } a:active { color: #FFFF00; }');
+					tf.styleSheet = css;
+					stage.invalidate();
+					tf.addEventListener(TextEvent.LINK,onSetting);
+					mainSettings.addChild(tf);
+				}
+				var htmlText:String = 
+					"Youtube Username: \n<font color='#FFFFFF'>"+youtubeMotion.service.storedUsername+"</font>\n\n"+
+					"Youtube Password: \n<font color='#FFFFFF'>"+(youtubeMotion.service.storedPassword.length?"********":"")+"</font>\n\n"+
+					"Lock code: \n<font color='#FFFFFF'>"+(lockCode.length?"********":"")+"</font>\n\n"+
+					"<a href='event:youtubeLogin'>[ CHANGE YOUTUBE LOGIN ]</a>\n\n"
+					+"<a href='event:lock'>[ CHANGE LOCK CODE ]</a>\n\n\n"
+					+"<a href='event:back'>[ USE SPY☾AM ]</a>";
+				if(message) {
+					htmlText += "\n\n"+"<font color='#00FF00'>"+message+"</font>";
+				}
+				tf.htmlText = htmlText;
+				stage.invalidate();
+			}
+			
+			private function changeLogin(message:String):void {
+				var mainSettings:Sprite = settings.getChildByName("main") as Sprite;
+				mainSettings.visible = false;
+				var loginSettings:Sprite = settings.getChildByName("login") as Sprite;
+				if(!loginSettings) {
+					loginSettings = new Sprite();
+					loginSettings.name = "login";
+					settings.addChild(loginSettings);
+				}
+				loginSettings.visible = true;
+				
+				var tf:TextField = loginSettings.getChildByName("loginLabel") as TextField;
+				var yLine:int = 35;
+				if(!tf) {
+					tf = new TextField();
+					tf.name = "loginLabel";
+					tf.defaultTextFormat  = new TextFormat("Courier",30,0xaaaaaa,null,null,null,null,null,TextFormatAlign.CENTER);
+					tf.y = yLine;
+					tf.multiline = true;
+					tf.wordWrap = true;
+					tf.height = 250;
+					var css:StyleSheet = new StyleSheet();
+					css.parseCSS('a:hover { color: #FFD700; } a:active { color: #FFFF00; }');
+					tf.styleSheet = css;
+					tf.htmlText = "Spy☾am requires a YouTube account. It will be used to upload all captured videos into a YouTube channel. If you do not have"+"" +
+						"a YouTube account, please <a href='event:signUp'><font color='#00AAAA'><u>Sign Up</u></font></a> for one.\n\nYouTube Login:";
+					tf.addEventListener(TextEvent.LINK,onSetting);
+					loginSettings.addChild(tf);
+					tf.addEventListener(Event.RENDER,
+						function(e:Event):void {
+							var tf:TextField = e.currentTarget as TextField;
+							tf.x = 10;
+							tf.width = stage.stageWidth-20;
+						});
+					stage.invalidate();
+				}
+				yLine = tf.y + tf.height;
+				
+				tf = loginSettings.getChildByName("loginField") as TextField;
+				if(!tf) {
+					tf = new TextField();
+					tf.name = "loginField";
+					tf.type = TextFieldType.INPUT;
+					tf.defaultTextFormat  = new TextFormat("Courier",30,0xaaaaaa,null,null,null,null,null,TextFormatAlign.CENTER);
+					tf.background = true;
+					tf.multiline = false;
+					tf.height = 35;
+					tf.backgroundColor = 0xFFFFFF;
+					tf.y = yLine;
+					tf.addEventListener(Event.RENDER,
+						function(e:Event):void {
+							var tf:TextField = e.currentTarget as TextField;
+							tf.x = 20;
+							tf.width = stage.stageWidth-40;
+						});
+					tf.addEventListener(KeyboardEvent.KEY_DOWN,onEnterUsername);
+					tf.addEventListener(FocusEvent.FOCUS_OUT,onUnfocusUsername);
+					loginSettings.addChild(tf);
+				}
+				tf.text = youtubeMotion.service.storedUsername;
+				tf.setSelection(0,tf.length);
+
+				yLine = tf.y + tf.height;
+
+				tf = loginSettings.getChildByName("passwordLabel") as TextField;
+				if(!tf) {
+					tf = new TextField();
+					tf.name = "passwordLabel";
+					tf.mouseEnabled = false;
+					tf.defaultTextFormat  = new TextFormat("Courier",30,0xaaaaaa,null,null,null,null,null,TextFormatAlign.CENTER);
+					tf.y = yLine;
+					tf.height = 35;
+					tf.addEventListener(Event.RENDER,
+						function(e:Event):void {
+							var tf:TextField = e.currentTarget as TextField;
+							tf.x = 0;
+							tf.width = stage.stageWidth;
+						});
+					tf.htmlText = "YouTube password:";
+					loginSettings.addChild(tf);
+				}
+				yLine = tf.y + tf.height;
+
+				tf = loginSettings.getChildByName("passwordField") as TextField;
+				if(!tf) {
+					tf = new TextField();
+					tf.name = "passwordField";
+					tf.type = TextFieldType.INPUT;
+					tf.defaultTextFormat  = new TextFormat("Courier",30,0xaaaaaa,null,null,null,null,null,TextFormatAlign.CENTER);
+					tf.background = true;
+					tf.multiline = false;
+					tf.wordWrap = true;
+					tf.displayAsPassword = true;
+					tf.height = 35;
+					tf.backgroundColor = 0xFFFFFF;
+					tf.y = yLine;
+					tf.addEventListener(Event.RENDER,
+						function(e:Event):void {
+							var tf:TextField = e.currentTarget as TextField;
+							tf.x = 20;
+							tf.width = stage.stageWidth-40;
+						});
+					tf.addEventListener(KeyboardEvent.KEY_DOWN,onEnterPassword);
+					loginSettings.addChild(tf);
+				}
+				tf.text = "";
+				
+				yLine = tf.y + tf.height;
+				
+				tf = loginSettings.getChildByName("confirm") as TextField;
+				if(!tf) {
+					tf = new TextField();
+					tf.name = "confirm";
+					tf.defaultTextFormat  = new TextFormat("Courier",30,0xaaaaaa,null,null,null,null,null,TextFormatAlign.CENTER);
+					tf.y = yLine+30;
+					css = new StyleSheet();
+					css.parseCSS('a:hover { color: #FFD700; } a:active { color: #FFFF00; }');
+					tf.styleSheet = css;
+					tf.addEventListener(TextEvent.LINK,onSetting);
+					loginSettings.addChild(tf);
+					tf.addEventListener(Event.RENDER,
+						function(e:Event):void {
+							var tf:TextField = e.currentTarget as TextField;
+							tf.x = 0;
+							tf.width = stage.stageWidth;
+							tf.height = stage.stageHeight-tf.y;
+						});
+				}
+				
+				var htmlText:String = "<a href='event:okLogin'>[ OK ]</a>\n\n<a href='event:noLogin'>[ CLEAR CREDENTIALS ]</a>\n\n<a href='event:cancelLogin'>[ CANCEL ]</a>";
+				if(message) {
+					htmlText += "\n\n"+"<font color='#AA0000'>"+message+"</font>";
+				}
+				tf.htmlText = htmlText;
+				stage.invalidate();
+			}
+			
+			private function changeLock(message:String):void {
+				var mainSettings:Sprite = settings.getChildByName("main") as Sprite;
+				mainSettings.visible = false;
+				
+				var lockSettings:Sprite = settings.getChildByName("lock") as Sprite;
+				if(!lockSettings) {
+					lockSettings = new Sprite();
+					lockSettings.name = "lock";
+					settings.addChild(lockSettings);
+				}
+				lockSettings.visible = true;
+				
+				var tf:TextField = lockSettings.getChildByName("lockLabel") as TextField;
+				var yLine:int = 35;
+				if(!tf) {
+					tf = new TextField();
+					tf.name = "lockLabel";
+					tf.mouseEnabled = false;
+					tf.defaultTextFormat  = new TextFormat("Courier",30,0xaaaaaa,null,null,null,null,null,TextFormatAlign.CENTER);
+					tf.y = yLine;
+					tf.multiline = true;
+					tf.wordWrap = true;
+					tf.height = 250;
+					tf.htmlText = "A lock code prevents others from using this application. After 3 min of inactivy, the application is locked and can only be unlocked using your code.\n\nEnter your lock code:";
+					lockSettings.addChild(tf);
+					tf.addEventListener(Event.RENDER,
+						function(e:Event):void {
+							var tf:TextField = e.currentTarget as TextField;
+							tf.x = 0;
+							tf.width = stage.stageWidth;
+						});
+				}
+				yLine = tf.y + tf.height;
+				
+				
+				tf = lockSettings.getChildByName("lockField") as TextField;
+				if(!tf) {
+					tf = new TextField();
+					tf.name = "lockField";
+					tf.type = TextFieldType.INPUT;
+					tf.defaultTextFormat  = new TextFormat("Courier",30,0xaaaaaa,null,null,null,null,null,TextFormatAlign.CENTER);
+					tf.background = true;
+					tf.multiline = false;
+					tf.displayAsPassword = true;
+					tf.height = 35;
+					tf.backgroundColor = 0xFFFFFF;
+					tf.y = yLine;
+					tf.addEventListener(KeyboardEvent.KEY_DOWN,onEnterLock);
+					lockSettings.addChild(tf);
+					tf.addEventListener(Event.RENDER,
+						function(e:Event):void {
+							var tf:TextField = e.currentTarget as TextField;
+							tf.x = 20;
+							tf.width = stage.stageWidth-40;
+						});
+				}
+				tf.text = "";
+				
+				yLine = tf.y + tf.height;
+				
+				tf = lockSettings.getChildByName("confirm") as TextField;
+				if(!tf) {
+					tf = new TextField();
+					tf.name = "confirm";
+					tf.defaultTextFormat  = new TextFormat("Courier",30,0xaaaaaa,null,null,null,null,null,TextFormatAlign.CENTER);
+					tf.y = yLine+30;
+					tf.multiline = true;
+					tf.wordWrap = true;
+					var css:StyleSheet = new StyleSheet();
+					css.parseCSS('a:hover { color: #FFD700; } a:active { color: #FFFF00; }');
+					tf.styleSheet = css;
+					tf.addEventListener(TextEvent.LINK,onSetting);
+					lockSettings.addChild(tf);
+					tf.addEventListener(Event.RENDER,
+						function(e:Event):void {
+							var tf:TextField = e.currentTarget as TextField;
+							tf.x = 0;
+							tf.width = stage.stageWidth;
+							tf.height = stage.stageHeight-tf.y;
+						});
+				}
+				
+				var htmlText:String = "<a href='event:okLock'>[ OK ]</a>\n\n<a href='event:noLock'>[ REMOVE LOCK ]</a>\n\n<a href='event:cancelLock'>[ CANCEL ]</a>";
+				if(message) {
+					htmlText += "\n\n"+"<font color='#AA0000'>"+message+"</font>";
+				}
+				tf.htmlText = htmlText;
+				stage.invalidate();
+			}
+			
+			private function checkCredentials():void {
+				var loginSettings:Sprite = settings.getChildByName("login") as Sprite;
+				loginSettings.visible = false;
+				youtubeMotion.service.login((loginSettings.getChildByName("loginField") as TextField).text,(loginSettings.getChildByName("passwordField") as TextField).text);
+				youtubeMotion.service.addEventListener(YouTubeEvent.YT_LOGIN_SUCCESS,onCheckedCredentials);
+				youtubeMotion.service.addEventListener(YouTubeEvent.YT_LOGIN_ERROR,onCheckedCredentials);
+			}
+			
+			private function onCheckedCredentials(e:YouTubeEvent):void {
+				youtubeMotion.service.removeEventListener(YouTubeEvent.YT_LOGIN_SUCCESS,onCheckedCredentials);
+				youtubeMotion.service.removeEventListener(YouTubeEvent.YT_LOGIN_ERROR,onCheckedCredentials);
+				
+				if(e.type==YouTubeEvent.YT_LOGIN_SUCCESS) {
+					showSettings("Login changed.");
+				}
+				else {
+					changeLogin("Failed login. Please try again.");
+				}
+			}
+			
+			private function onEnterLock(e:KeyboardEvent):void {
+				if(e.keyCode==Keyboard.ENTER) {
+					validateLock();
+					e.preventDefault();
+				}
+			}
+			
+			private function validateLock():void {
+				var lockSettings:Sprite = settings.getChildByName("lock") as Sprite;
+				lockSettings.visible = false;
+				var lockText:String = (lockSettings.getChildByName("lockField") as TextField).text;
+				if(lockText.length>=4) {
+					lockCode = (lockSettings.getChildByName("lockField") as TextField).text;
+					showSettings("Lock code has been changed. Please make sure to remember it.");
+				}
+				else {
+					changeLock("The lock code must be 4 characters minimum. Please try again.");
+				}
+			}
+			
+			private function onEnterUsername(e:KeyboardEvent):void {
+				if(e.keyCode==Keyboard.ENTER) {
+					var loginSettings:Sprite = settings.getChildByName("login") as Sprite;
+					var tf:TextField = loginSettings.getChildByName("passwordField") as TextField;
+					stage.focus = tf;
+					tf.setSelection(0,tf.length);
+					tf.requestSoftKeyboard();
+					e.preventDefault();
+				}
+			}
+			
+			private function onUnfocusUsername(e:FocusEvent):void {
+				var tf:TextField = e.currentTarget as TextField;
+				var username:String = tf.text;
+				if(username.indexOf("@")<0) {
+					tf.text = username+"@gmail.com";
+				}
+			}
+			
+			private function onEnterPassword(e:KeyboardEvent):void {
+				if(e.keyCode==Keyboard.ENTER) {
+					var loginSettings:Sprite = settings.getChildByName("login") as Sprite;
+					loginSettings.visible = false;
+					checkCredentials();
+					e.preventDefault();
+				}
+			}
+			
+			private function onSetting(e:TextEvent):void {
+				switch(e.text) {
+					case "signUp":
+						navigateToURL(new URLRequest(signupLink));
+						break;
+					case "noLogin":
+						youtubeMotion.service.clearUserCredentials();
+						changeLogin("Your credentials have been cleared.");
+						break;
+					case "okLogin":
+						var loginSettings:Sprite = settings.getChildByName("login") as Sprite;
+						loginSettings.visible = false;
+						checkCredentials();
+						break;
+					case "cancelLock":
+						var lockSettings:Sprite = settings.getChildByName("lock") as Sprite;
+						lockSettings.visible = false;
+						showSettings(null);
+						break;
+					case "noLock":
+						lockSettings = settings.getChildByName("lock") as Sprite;
+						lockCode = "";
+						lockSettings.visible = false;
+						showSettings("Lock code removed.");
+						break;
+					case "okLock":
+						validateLock();
+						break;
+					case "cancelLogin":
+						cancelLogin();
+						break;
+					case "youtubeLogin":
+						changeLogin(null);
+						break;
+					case "lock":
+						changeLock("Warning: If you forget your lock code, you must resinstall the app to use it.");
+						break;
+					case "back":
+						sprite.visible = true;
+						settings.visible = false;
+						wakeUp(true);
+						break;
+				}
+			}
+			
+			private function cancelLogin():void {
+				var loginSettings:Sprite = settings.getChildByName("login") as Sprite;
+				loginSettings.visible = false;
+				if(youtubeMotion.service.storedUsername.length && youtubeMotion.service.storedPassword.length) {
+					youtubeMotion.login(youtubeMotion.service.storedUsername,youtubeMotion.service.storedPassword);
+					youtubeMotion.service.addEventListener(YouTubeEvent.YT_LOGIN_SUCCESS,onCancelLogin);
+					youtubeMotion.service.addEventListener(YouTubeEvent.YT_LOGIN_ERROR,onCancelLogin);
+				}
+				else {
+					showSettings("Warning: Valid credentials required to use Spy☾am.");
+				}
+			}
+			
+			private function onCancelLogin(e:YouTubeEvent):void {
+				youtubeMotion.service.removeEventListener(YouTubeEvent.YT_LOGIN_SUCCESS,onCancelLogin);
+				youtubeMotion.service.removeEventListener(YouTubeEvent.YT_LOGIN_ERROR,onCancelLogin);
+				if(e.type==YouTubeEvent.YT_LOGIN_SUCCESS) {
+					showSettings(null);
+				}
+				else {
+					showSettings("Warning: Valid credentials required to use Spy☾am.");
+				}
+			}
+			
+			private function getDescription():String {
+				var str:String="";
+				str += "Spy Cam\nUploaded "+new Date().toLocaleString()+"\n";
+				str += "\n";
+				var currentUpload:UserUpload = youtubeMotion.service.currentlyUploadingFile;
+				str += "Files in queue:" + youtubeMotion.filesInQueue +".\n";
+				str += "Use Spy Cam responsibly. Do not use Spy Cam for illegal or immoral purpose.\n";
+				return str;
+			}
+			
+		]]>
+	</fx:Script>
+	<fx:Declarations>
+		<cam:YoutubeMotionCapture id='youtubeMotion' />
+	</fx:Declarations>
+	<s:SpriteVisualElement id="settings" visible="false"/>
+	<s:SpriteVisualElement id="sprite"/>
+</s:Application>

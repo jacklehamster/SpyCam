@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<flexLibProperties version="1">
+<includeClasses>
+<classEntry path="com.nitobi.util.UpdateManager"/>
+<classEntry path="com.nitobi.webapis.youtube.UserUpload"/>
+<classEntry path="com.nitobi.webapis.youtube.UserVideo"/>
+<classEntry path="com.nitobi.webapis.youtube.YouTubeService"/>
+<classEntry path="com.nitobi.webapis.youtube.event.YouTubeEvent"/>
+<classEntry path="com.nitobi.webapis.youtube.rest.GetAllDevTagVideosAction"/>
+<classEntry path="com.nitobi.webapis.youtube.rest.GetUploadTokenAction"/>
+<classEntry path="com.nitobi.webapis.youtube.rest.GetUserVideosAction"/>
+<classEntry path="com.nitobi.webapis.youtube.rest.LoginAction"/>
+<classEntry path="com.nitobi.webapis.youtube.rest.LogoutAction"/>
+<classEntry path="com.nitobi.webapis.youtube.rest.RestAction"/>
+<classEntry path="com.nitobi.webapis.youtube.rest.UploadAction"/>
+</includeClasses>
+<includeResources/>
+<namespaceManifests/>
+</flexLibProperties>
